@@ -29,7 +29,8 @@ waiting_drain = 0.1/loop_frequency   # Battery drain while waiting
 feinpos_drain = 0.03/loop_frequency    # Battery drain while positioning
 hub_drain = 0.04/loop_frequency        # Battery drain while using the lift
 
-
+class nothing:
+    pass
 
 class Karis:
     state = 'driving'
