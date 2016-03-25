@@ -173,5 +173,9 @@ if __name__=='__main__':
         agent.check_state()
         agent.drain_battery()
         agent.publish_updates()
-        print ('name: {0} \t state: {1} \t charge: {2} \t pos_x: {3} \t pos_y: {4}'.format(agent.name, agent.state, agent.battery_charge, agent.position_x, agent.position_y))
+        print ('name: {0} \t state: {1} \t charge: {2} \t pos_x: {3} \t pos_y: {4}'.format(agent.name,
+                                                                                           agent.state,
+                                                                                           agent.battery_charge,
+                                                                                           agent.position_x,
+                                                                                           agent.position_y))
         r.sleep()
