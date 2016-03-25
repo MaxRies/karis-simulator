@@ -14,6 +14,7 @@ karis_max_speed = 2.0         # max speed in m/s
 karis_feinpos_speed = 0.1   # Speed during fine positioning
 loop_frequency = 100        # frequency of main loop. battery constants rely on this one.
 feinpos_time = 30           # estimated time for fine positioning. every approach is randomized
+hub_time = 30
 
 '''
 Battery drain factors.
@@ -45,6 +46,8 @@ class Karis:
     position_1_y = 0.0
     position_1_reached = False
     position_2_reached = False
+    hub_ausgefahren = False
+    count = 0
     name = 'karis1'         # Name format: karis[n]
 
     def __init__(self, name, initial_charge, start_x, start_y):
@@ -55,7 +58,6 @@ class Karis:
         rospy.init_node(self.name, anonymous = False)
         self.subscribe_to_topics()
         self.setup_publishers()
-
     '''
     Stuff that interacts with ROS message system
     '''
@@ -76,6 +78,7 @@ class Karis:
         # Build needed messages
         self.navistatus = NaviStatus
         self.navistatus.navi_state = self.nav_status_return_function()
+        
         #publish messages
         self.battery_pub.publish(self.battery_charge)
         self.status_pub.publish(self.navistatus)
@@ -88,36 +91,45 @@ class Karis:
         elif self.position_1_reached:
             return 3
         else:
-            print('Error in nav_status_return')
-            return 4
+            return 0
 
     '''
     Callback functions for ROS message system
     '''
     def move_base_callback(self, data):
-        self.position_1_x = data.pose.position.x
-        self.position_1_y = data.pose.position.y
-        if self.position_1_x != self.position_x or self.position_1_y != self.position_y:
-            print('New goal: x: {0} y: {1}'.format(self.position_1_x, self.position_1_y))
-            self.position_1_reached = False
-            self.state = 'driving'
+        if self.state == 'waiting':
+            self.position_1_x = data.pose.position.x
+            self.position_1_y = data.pose.position.y
+            if self.position_1_x != self.position_x or self.position_1_y != self.position_y:
+                print('New goal: x: {0} y: {1}'.format(self.position_1_x, self.position_1_y))
+                self.position_1_reached = False
+                self.state = 'driving'
+        else:
+            rospy.logerr('move_base_simple/goal came to early for {0}. {0} state: {1}'.format(self.name, self.state))
 
     def feinpos_callback(self, data):
-        if data == 1 and self.position_1_reached == True:
+        if data.data == 1 and self.position_1_reached:
             self.state = 'feinpos'
-            self.position_1_reached = False
-            self.feinpos.count = 0  # Reset counter for feinpositioning function
-            self.feinpos.time = feinpos_time + random.randint(-20,20)    #Time to position is randomized
-        elif data == 1 and self.position_2_reached == True:
+            self.count = 0  # Reset counter for feinpositioning function
+            self.feinpos_time = feinpos_time + random.randint(-20,20)    #Time to position is randomized
+        elif data.data == 1 and self.position_2_reached == True:
             self.state = 'feinpos'
-            self.feinpos.count = 0
-            self.feinpos.time = feinpos_time + random.randint(-20,20)
+            self.count = 0
+            self.feinpos_time = feinpos_time + random.randint(-20,20)
+        else:
+            rospy.logerr('feinpos came to early for {0}. {0} state: {1} data: {2}'.format(self.name,
+                                                                                                self.state,
+                                                                                                data.data))
 
     def feinpos_reset_callback(self, data):
         pass
 
     def liftcommand_callback(self, data):
-        pass
+        if self.state == 'waiting' and self.position_2_reached == True:
+            self.state = 'hub'
+            self.count = 0
+
+
     '''
     Drain the battery according to the state our karis is in
     '''
@@ -130,6 +142,19 @@ class Karis:
             self.battery_charge = self.battery_charge - feinpos_drain
         elif self.state == 'hub':
             self.battery_charge = self.battery_charge - hub_drain
+
+    '''
+    Functions for the lift.
+    '''
+    def hub_up(self):
+        self.count = self.count + 1
+        if self.count >= hub_time * loop_frequency:
+            self.hub_ausgefahren = True
+
+    def hub_down(self):
+        self.count = self.count + 1
+        if self.count >= hub_time * loop_frequency:
+            self.hub_ausgefahren = False
 
     '''
     Karis moves in an orthogonal grid to its final position.
@@ -156,10 +181,17 @@ class Karis:
 
     # Fine positioning: wait for a predefined amount of time, then send position_2 reached command.
     def feinpos(self):
-        self.feinpos.count = self.feinpos.count + 1
-        if self.feinpos.count >= self.feinpos.time * loop_frequency:
+        self.count = self.count + 1
+        if self.count >= feinpos_time * loop_frequency:
             # Feinpositionierung beendet
-            self.position_2_reached = True
+            if self.position_1_reached:
+                self.position_2_reached = True
+                self.position_1_reached = False
+            else:
+                self.position_2_reached = False
+                self.position_1_reached = True
+            self.state = 'waiting'
+            self.count = 0
             self.feinpos_pub.publish(1)
 
     def check_state(self):
@@ -171,10 +203,13 @@ class Karis:
         elif self.state == 'feinpos':
             self.feinpos()
         elif self.state == 'hub':
-            pass
-            #self.hub()
+            if self.hub_ausgefahren:
+                self.hub_down()
+            else:
+                self.hub_up()
         else:
             print(self.name + ' is in an unknown state: ' + self.state + '. Please kill it now.')
+            rospy.logerr(self.name + ' is in an unknown state: ' + self.state + '. Please kill it now.')
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -195,3 +230,6 @@ if __name__ == '__main__':
                                                                                            agent.position_x,
                                                                                            agent.position_y))
         r.sleep()
+# For testing:
+# rostopic pub /karis1/move_base_simple/goal geometry_msgs/PoseStamped '{header: auto, pose:{position:[10.0, 20.0, 0.0]}}'
+#
