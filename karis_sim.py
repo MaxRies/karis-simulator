@@ -1,7 +1,7 @@
 __author__ = 'Maximilian Ries'
 
 import rospy
-from std_msgs.msg import Int8, Int16
+from std_msgs.msg import Int8, Int16, Header
 from geometry_msgs.msg import PoseStamped
 from karislib.msg import LiftCommand, NaviStatus, MultiNavRobotInformation, LiftStatus
 import argparse
@@ -29,20 +29,23 @@ waiting_drain = 0.1/loop_frequency   # Battery drain while waiting
 feinpos_drain = 0.03/loop_frequency    # Battery drain while positioning
 hub_drain = 0.04/loop_frequency        # Battery drain while using the lift
 
-class nothing:
-    pass
 
 class Karis:
-    state = 'driving'
+    # states karis can assume:
+    # waiting
+    # driving
+    # finepos
+    # hub
+
+    state = 'waiting'
     battery_charge = 1000
     position_x = 0.0
     position_y = 0.0
-    position_1_x = 10.0
-    position_1_y = 10.0
+    position_1_x = 0.0
+    position_1_y = 0.0
     position_1_reached = False
     position_2_reached = False
     name = 'karis1'         # Name format: karis[n]
-
 
     def __init__(self, name, initial_charge, start_x, start_y):
         self.battery_charge = initial_charge
@@ -52,6 +55,7 @@ class Karis:
         rospy.init_node(self.name, anonymous = False)
         self.subscribe_to_topics()
         self.setup_publishers()
+
     '''
     Stuff that interacts with ROS message system
     '''
@@ -69,7 +73,23 @@ class Karis:
         self.lift_pub = rospy.Publisher('/'+self.name+'/karis_lift_status', LiftStatus, queue_size=10)
 
     def publish_updates(self):
+        # Build needed messages
+        self.navistatus = NaviStatus
+        self.navistatus.navi_state = self.nav_status_return_function()
+        #publish messages
         self.battery_pub.publish(self.battery_charge)
+        self.status_pub.publish(self.navistatus)
+
+    def nav_status_return_function(self):
+        if self.state == 'waiting':
+            return 0
+        elif self.state == 'driving' and self.position_1_reached is False:
+            return 2
+        elif self.position_1_reached:
+            return 3
+        else:
+            print('Error in nav_status_return')
+            return 4
 
     '''
     Callback functions for ROS message system
@@ -83,7 +103,6 @@ class Karis:
             self.state = 'driving'
 
     def feinpos_callback(self, data):
-        # TODO Hier noch weitermachen. Warten, dann melden das Feinpositioniert wurde (siehe PDF von patric)
         if data == 1 and self.position_1_reached == True:
             self.state = 'feinpos'
             self.position_1_reached = False
@@ -93,7 +112,6 @@ class Karis:
             self.state = 'feinpos'
             self.feinpos.count = 0
             self.feinpos.time = feinpos_time + random.randint(-20,20)
-
 
     def feinpos_reset_callback(self, data):
         pass
@@ -117,11 +135,11 @@ class Karis:
     Karis moves in an orthogonal grid to its final position.
     It first drives to the desired x coordinate, then to the desired y coordinate.
     A tolerance interval of +- 0.1 m around the desired goal position is accepted.
+    Status: working!
     '''
     def drive_to_position_1(self):
         if self.position_1_reached == False:
             if self.position_x < self.position_1_x - 0.1:
-                print('PENISPENISPENISPENIS')
                 self.position_x = self.position_x + karis_max_speed/loop_frequency
             elif self.position_x > self.position_1_x + 0.1:
                 self.position_x = self.position_x - karis_max_speed/loop_frequency
@@ -158,10 +176,7 @@ class Karis:
         else:
             print(self.name + ' is in an unknown state: ' + self.state + '. Please kill it now.')
 
-
-
-
-if __name__=='__main__':
+if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('name', help='name of simulated karis')
     parser.add_argument('initial_charge', help='initial battery charge in permille', type=int)
